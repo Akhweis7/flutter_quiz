@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:google_sign_in/google_sign_in.dart';
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -16,6 +17,9 @@ class _SignUpPageState extends State<SignUpPage> {
   final TextEditingController passwordController = TextEditingController();
   final TextEditingController confirmPasswordController =
       TextEditingController();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: '379014504202-cfr5tgueggk2vi4ok6p7jqv26su1qkoc.apps.googleusercontent.com',
+  );
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -41,18 +45,25 @@ class _SignUpPageState extends State<SignUpPage> {
     );
   }
 
-  Future<void> sendUserData(String name, String email, String password) async {
+  Future<void> sendUserData(String username, String email, String password) async {
     final url = Uri.parse('https://185.140.181.252/kanban/api/Auth/signup');
 
     try {
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json; charset=UTF-8'},
-        body: jsonEncode({'name': name, 'email': email, 'password': password}),
+        body: jsonEncode({
+          'username': username,
+          'email': email,
+          'password': password,
+        }),
       );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         _showMessage('Account created successfully');
+        if (mounted) {
+          Navigator.pop(context);
+        }
       } else {
         _showMessage('Signup failed (${response.statusCode}). ${response.body}');
       }
@@ -62,12 +73,15 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Future<void> _handleSignUp() async {
-    final String name = nameController.text.trim();
+    final String username = nameController.text.trim();
     final String email = emailController.text.trim();
     final String password = passwordController.text;
     final String confirmPassword = confirmPasswordController.text;
 
-    if (name.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+    if (username.isEmpty ||
+        email.isEmpty ||
+        password.isEmpty ||
+        confirmPassword.isEmpty) {
       _showMessage('Please fill all fields');
       return;
     }
@@ -82,7 +96,49 @@ class _SignUpPageState extends State<SignUpPage> {
       return;
     }
 
-    await sendUserData(name, email, password);
+    await sendUserData(username, email, password);
+  }
+
+  Future<void> _handleGoogleSignUp() async {
+    try {
+      final account = await _googleSignIn.signIn();
+      if (account == null) return;
+
+      final auth = await account.authentication;
+      final idToken = auth.idToken;
+
+      if (idToken == null) {
+        _showMessage('Failed to get Google token');
+        return;
+      }
+
+      await sendGoogleToken(idToken, account.displayName ?? '', account.email);
+    } catch (e) {
+      _showMessage('Google sign-in error: $e');
+    }
+  }
+
+  Future<void> sendGoogleToken(String idToken, String name, String email) async {
+    final url = Uri.parse('https://185.140.181.252/kanban/api/Auth/google-signup');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: jsonEncode({'idToken': idToken, 'name': name, 'email': email}),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        _showMessage('Account created successfully');
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        _showMessage('Signup failed (${response.statusCode}). ${response.body}');
+      }
+    } catch (e) {
+      _showMessage('Network error: $e');
+    }
   }
 
   @override
@@ -243,6 +299,12 @@ class _SignUpPageState extends State<SignUpPage> {
                           child: const Text('Sign in'),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _handleGoogleSignUp,
+                      icon: const Icon(Icons.login),
+                      label: const Text('Sign up with Google'),
                     ),
                   ],
                 ),
