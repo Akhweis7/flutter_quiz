@@ -11,20 +11,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:quizz/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('Sign in screen renders expected controls', (
+    WidgetTester tester,
+  ) async {
     await tester.pumpWidget(const MyApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Let async image/frame work settle.
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Sign up'), findsOneWidget);
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(find.byIcon(Icons.storefront), findsOneWidget);
   });
 }

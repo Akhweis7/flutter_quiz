@@ -1,7 +1,11 @@
-import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'controllers/auth_controller.dart';
+import 'models/models.dart';
+import 'services/api_service.dart';
 
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -10,19 +14,23 @@ class SignUpPage extends StatefulWidget {
   State<SignUpPage> createState() => _SignUpPageState();
 }
 
-
 class _SignUpPageState extends State<SignUpPage> {
+  final _auth = Get.find<AuthController>();
+
   final TextEditingController nameController = TextEditingController();
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
   final TextEditingController confirmPasswordController =
       TextEditingController();
+
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-    serverClientId: '379014504202-cfr5tgueggk2vi4ok6p7jqv26su1qkoc.apps.googleusercontent.com',
+    serverClientId:
+        '379014504202-cfr5tgueggk2vi4ok6p7jqv26su1qkoc.apps.googleusercontent.com',
   );
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -34,73 +42,69 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   bool _isValidEmail(String email) {
-    final RegExp emailRegex =
-        RegExp(r'^[\w\.\-]+@([\w\-]+\.)+[\w\-]{2,4}$');
+    final RegExp emailRegex = RegExp(r'^[\w\.\-]+@([\w\-]+\.)+[\w\-]{2,4}$');
     return emailRegex.hasMatch(email.trim());
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+    Get.snackbar(
+      'Notice',
+      message,
+      snackPosition: SnackPosition.BOTTOM,
     );
   }
 
-  Future<void> sendUserData(String username, String email, String password) async {
-    final url = Uri.parse('https://185.140.181.252/kanban/api/Auth/signup');
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json; charset=UTF-8'},
-        body: jsonEncode({
-          'username': username,
-          'email': email,
-          'password': password,
-        }),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _showMessage('Account created successfully');
-        if (mounted) {
-          Navigator.pop(context);
-        }
-      } else {
-        _showMessage('Signup failed (${response.statusCode}). ${response.body}');
-      }
-    } catch (e) {
-      _showMessage('Network error: $e');
-    }
-  }
-
   Future<void> _handleSignUp() async {
-    final String username = nameController.text.trim();
-    final String email = emailController.text.trim();
-    final String password = passwordController.text;
-    final String confirmPassword = confirmPasswordController.text;
+    final username = nameController.text.trim();
+    final email = emailController.text.trim();
+    final password = passwordController.text;
+    final confirmPassword = confirmPasswordController.text;
 
-    if (username.isEmpty ||
-        email.isEmpty ||
-        password.isEmpty ||
-        confirmPassword.isEmpty) {
+    if (username.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
       _showMessage('Please fill all fields');
       return;
     }
-
     if (!_isValidEmail(email)) {
       _showMessage('Please enter a valid email address');
       return;
     }
-
     if (password != confirmPassword) {
       _showMessage('Passwords do not match');
       return;
     }
 
-    await sendUserData(username, email, password);
+    setState(() => _isLoading = true);
+    try {
+      final res = await ApiService.post('/Auth/signup', {
+        'username': username,
+        'email': email,
+        'password': password,
+      });
+
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        final data = AuthResponse.fromJson(
+          jsonDecode(res.body) as Map<String, dynamic>,
+        );
+        if (data.token != null && data.token!.isNotEmpty) {
+          _auth.storeToken(data.token!, data.user);
+          Get.offAllNamed('/kanban');
+        } else {
+          _showMessage('Account created! Please sign in.');
+          Get.back();
+        }
+      } else {
+        _showMessage('Signup failed (${res.statusCode}). ${res.body}');
+      }
+    } catch (e) {
+      _showMessage('Network error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _handleGoogleSignUp() async {
     try {
+      await _googleSignIn.signOut();
       final account = await _googleSignIn.signIn();
       if (account == null) return;
 
@@ -108,36 +112,44 @@ class _SignUpPageState extends State<SignUpPage> {
       final idToken = auth.idToken;
 
       if (idToken == null) {
-        _showMessage('Failed to get Google token');
+        _showMessage('Failed to get Google ID token.');
         return;
       }
 
-      await sendGoogleToken(idToken, account.displayName ?? '', account.email);
-    } catch (e) {
-      _showMessage('Google sign-in error: $e');
-    }
-  }
+      setState(() => _isLoading = true);
+      try {
+        final res = await ApiService.post('/Auth/google-signup', {
+          'idToken': idToken,
+          'name': account.displayName ?? '',
+          'email': account.email,
+        });
 
-  Future<void> sendGoogleToken(String idToken, String name, String email) async {
-    final url = Uri.parse('https://185.140.181.252/kanban/api/Auth/google-signup');
-
-    try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json; charset=UTF-8'},
-        body: jsonEncode({'idToken': idToken, 'name': name, 'email': email}),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _showMessage('Account created successfully');
-        if (mounted) {
-          Navigator.pop(context);
+        if (res.statusCode == 200 || res.statusCode == 201) {
+          final data = AuthResponse.fromJson(
+            jsonDecode(res.body) as Map<String, dynamic>,
+          );
+          if (data.token != null && data.token!.isNotEmpty) {
+            _auth.storeToken(data.token!, data.user);
+            Get.offAllNamed('/kanban');
+          } else {
+            _showMessage('Account created! Please sign in.');
+            Get.back();
+          }
+        } else {
+          _showMessage('Google signup failed (${res.statusCode}). ${res.body}');
         }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } on PlatformException catch (e) {
+      if (e.code == 'sign_in_canceled') return;
+      if (e.message != null && e.message!.contains('ApiException: 10')) {
+        _showMessage('Google Sign-In not configured: add SHA-1 fingerprint to Firebase Console.');
       } else {
-        _showMessage('Signup failed (${response.statusCode}). ${response.body}');
+        _showMessage('Google sign-in error (${e.code}): ${e.message}');
       }
     } catch (e) {
-      _showMessage('Network error: $e');
+      _showMessage('Google sign-in error: $e');
     }
   }
 
@@ -146,11 +158,10 @@ class _SignUpPageState extends State<SignUpPage> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: NetworkImage(
-              'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR5cMTnHdN7qqJhUw1hyyUjl8rUbQUpXPfoEw&s',
-            ),
-            fit: BoxFit.cover,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFEAF2FF), Color(0xFFF7F9FF)],
           ),
         ),
         child: Center(
@@ -179,12 +190,12 @@ class _SignUpPageState extends State<SignUpPage> {
                       width: 70,
                       height: 70,
                       decoration: BoxDecoration(
-                        color: const Color.fromARGB(255, 255, 255, 255),
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
                         Icons.person_add_alt_1,
-                        color: Color.fromARGB(255, 0, 0, 0),
+                        color: Colors.black,
                         size: 40,
                       ),
                     ),
@@ -192,14 +203,11 @@ class _SignUpPageState extends State<SignUpPage> {
                     TextField(
                       controller: nameController,
                       decoration: InputDecoration(
-                        prefixIcon: Icon(
-                          Icons.person,
-                          color:
-                              const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
-                          size: 20,
-                        ),
+                        prefixIcon: Icon(Icons.person,
+                            color: Colors.black.withValues(alpha: 0.5),
+                            size: 20),
                         border: const OutlineInputBorder(),
-                        labelText: 'Enter your name',
+                        labelText: 'Username',
                         hintText: 'John Doe',
                       ),
                     ),
@@ -208,12 +216,9 @@ class _SignUpPageState extends State<SignUpPage> {
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
-                        prefixIcon: Icon(
-                          Icons.email,
-                          color:
-                              const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
-                          size: 20,
-                        ),
+                        prefixIcon: Icon(Icons.email,
+                            color: Colors.black.withValues(alpha: 0.5),
+                            size: 20),
                         border: const OutlineInputBorder(),
                         labelText: 'Email',
                         hintText: 'john@example.com',
@@ -226,12 +231,9 @@ class _SignUpPageState extends State<SignUpPage> {
                       autocorrect: false,
                       enableSuggestions: false,
                       decoration: InputDecoration(
-                        prefixIcon: Icon(
-                          Icons.password,
-                          color:
-                              const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
-                          size: 20,
-                        ),
+                        prefixIcon: Icon(Icons.password,
+                            color: Colors.black.withValues(alpha: 0.5),
+                            size: 20),
                         labelText: 'Password',
                         border: const OutlineInputBorder(),
                         suffixIcon: IconButton(
@@ -239,15 +241,11 @@ class _SignUpPageState extends State<SignUpPage> {
                             _obscurePassword
                                 ? Icons.visibility_off
                                 : Icons.visibility,
-                            color:
-                                const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
+                            color: Colors.black.withValues(alpha: 0.5),
                             size: 20,
                           ),
-                          onPressed: () {
-                            setState(() {
-                              _obscurePassword = !_obscurePassword;
-                            });
-                          },
+                          onPressed: () =>
+                              setState(() => _obscurePassword = !_obscurePassword),
                         ),
                       ),
                     ),
@@ -258,12 +256,9 @@ class _SignUpPageState extends State<SignUpPage> {
                       autocorrect: false,
                       enableSuggestions: false,
                       decoration: InputDecoration(
-                        prefixIcon: Icon(
-                          Icons.verified_user,
-                          color:
-                              const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
-                          size: 20,
-                        ),
+                        prefixIcon: Icon(Icons.verified_user,
+                            color: Colors.black.withValues(alpha: 0.5),
+                            size: 20),
                         labelText: 'Confirm password',
                         border: const OutlineInputBorder(),
                         suffixIcon: IconButton(
@@ -271,38 +266,39 @@ class _SignUpPageState extends State<SignUpPage> {
                             _obscureConfirmPassword
                                 ? Icons.visibility_off
                                 : Icons.visibility,
-                            color:
-                                const Color.fromARGB(255, 0, 0, 0).withOpacity(0.5),
+                            color: Colors.black.withValues(alpha: 0.5),
                             size: 20,
                           ),
-                          onPressed: () {
-                            setState(() {
-                              _obscureConfirmPassword = !_obscureConfirmPassword;
-                            });
-                          },
+                          onPressed: () => setState(
+                              () => _obscureConfirmPassword = !_obscureConfirmPassword),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         ElevatedButton(
-                          onPressed: _handleSignUp,
-                          child: const Text('Create account'),
+                          onPressed: _isLoading ? null : _handleSignUp,
+                          child: _isLoading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Create account'),
                         ),
                         const SizedBox(width: 12),
                         TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                          },
+                          onPressed: () => Get.back(),
                           child: const Text('Sign in'),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: _handleGoogleSignUp,
+                      onPressed: _isLoading ? null : _handleGoogleSignUp,
                       icon: const Icon(Icons.login),
                       label: const Text('Sign up with Google'),
                     ),
